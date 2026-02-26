@@ -89,6 +89,8 @@ def root():
     return HTMLResponse("<h1>Cloud Classifier API</h1><p>POST /predict with an image.</p>")
 
 @app.get("/health")
+@app.get("/kaithheathcheck")
+@app.get("/kaithhealthcheck")
 def health():
     return {"status": "ok", "model": MODEL_PATH, "classes": len(CLASS_ABBR)}
 
