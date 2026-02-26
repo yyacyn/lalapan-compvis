@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cloud Classifier</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Syne', sans-serif; background: #0a1628; color: #e2eaf4; }
+    .mono { font-family: 'DM Mono', monospace; }
+    .glass { background: rgba(255,255,255,0.03); border: 1px solid rgba(148,184,217,0.12); backdrop-filter: blur(12px); }
+    .drop-zone { border: 2px dashed rgba(148,184,217,0.25); transition: all 0.3s; cursor: pointer; }
+    .drop-zone:hover, .drop-zone.drag-over { border-color: #2563eb; background: rgba(37,99,235,0.06); }
+    .btn { background: linear-gradient(135deg,#1d4ed8,#2563eb); border: 1px solid rgba(96,165,250,0.3); transition: all 0.2s; box-shadow: 0 4px 15px rgba(37,99,235,0.25); }
+    .btn:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(37,99,235,0.4); }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+    .bar-track { height: 6px; background: rgba(148,184,217,0.1); border-radius: 99px; overflow: hidden; }
+    .bar-fill { height: 100%; border-radius: 99px; transition: width 0.8s cubic-bezier(0.23,1,0.32,1); background: linear-gradient(90deg,#2563eb,#60a5fa); }
+    .bar-fill.top { background: linear-gradient(90deg,#2563eb,#38bdf8); box-shadow: 0 0 8px rgba(96,165,250,0.5); }
+    .loader { width:36px; height:36px; border:3px solid rgba(148,184,217,0.15); border-top-color:#2563eb; border-radius:50%; animation:spin 0.8s linear infinite; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+    .pred-badge { background: linear-gradient(135deg,rgba(37,99,235,0.2),rgba(96,165,250,0.1)); border: 1px solid rgba(96,165,250,0.3); animation: fadeUp 0.4s ease; }
+    @keyframes fadeUp { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
+    .tab-active { background:rgba(37,99,235,0.15); border-bottom-color:rgba(37,99,235,0.6) !important; color:#93c5fd; }
+  </style>
+</head>
+<body class="min-h-screen">
+
+  <!-- Header -->
+  <header class="glass border-b border-white/5 px-6 py-4">
+    <div class="max-w-5xl mx-auto flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <span style="font-size:1.8rem">⛅</span>
+        <div>
+          <h1 class="text-xl" style="font-weight:800;letter-spacing:-0.02em;">Cloud<span style="color:#60a5fa;">AI</span></h1>
+          <p class="mono text-xs" style="color:#94b8d9;font-size:0.65rem;">DenseNet121 · 11 classes</p>
+        </div>
+      </div>
+      <div class="flex items-center gap-2">
+        <div id="api-dot" class="w-2 h-2 rounded-full bg-yellow-400" style="box-shadow:0 0 6px #facc15"></div>
+        <span id="api-status" class="mono text-xs" style="color:#94b8d9;">Checking API...</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-5xl mx-auto px-4 py-8">
+
+    <!-- Hero -->
+    <div class="text-center mb-10">
+      <h2 class="text-4xl mb-3" style="font-weight:800;letter-spacing:-0.03em;line-height:1.1;">
+        Identify clouds<br/><span style="color:#60a5fa;">from any image</span>
+      </h2>
+      <p class="mono text-sm" style="color:#94b8d9;">Upload a photo or use your camera · 11 cloud types</p>
+    </div>
+
+    <div class="grid gap-6" style="grid-template-columns:1fr 1fr;">
+
+      <!-- Input Panel -->
+      <div class="glass rounded-2xl overflow-hidden">
+        <div class="flex border-b" style="border-color:rgba(148,184,217,0.1);">
+          <button id="tab-upload" onclick="switchTab('upload')" class="tab-active flex-1 py-3 text-sm font-600 border-b-2" style="border-color:transparent;">📁 Upload</button>
+          <button id="tab-camera" onclick="switchTab('camera')" class="flex-1 py-3 text-sm font-600 border-b-2" style="border-color:transparent;color:#94b8d9;">📷 Camera</button>
+        </div>
+
+        <!-- Upload -->
+        <div id="panel-upload" class="p-5">
+          <div id="drop-zone" class="drop-zone rounded-xl p-6 text-center"
+            onclick="document.getElementById('file-input').click()"
+            ondragover="ev.preventDefault();this.classList.add('drag-over')"
+            ondragleave="this.classList.remove('drag-over')"
+            ondrop="handleDrop(event)">
+            <div id="upload-placeholder">
+              <div style="font-size:3rem;margin-bottom:12px;">🌤️</div>
+              <p class="font-600 mb-1">Drop image here</p>
+              <p class="mono text-xs" style="color:#94b8d9;">or click to browse · JPG, PNG, WEBP</p>
+            </div>
+            <img id="preview-img" class="hidden rounded-lg mx-auto" style="max-height:280px;object-fit:contain;" />
+          </div>
+          <input id="file-input" type="file" accept="image/*" class="hidden" onchange="handleFileSelect(event)" />
+          <button id="predict-btn" onclick="predictUpload()" disabled
+            class="btn w-full mt-4 py-3 rounded-xl text-sm font-600 text-white">
+            Classify Cloud →
+          </button>
+        </div>
+
+        <!-- Camera -->
+        <div id="panel-camera" class="p-5 hidden">
+          <div class="relative rounded-xl overflow-hidden" style="background:rgba(0,0,0,0.3);min-height:200px;">
+            <video id="video" autoplay playsinline class="hidden w-full rounded-xl" style="max-height:280px;object-fit:cover;"></video>
+            <canvas id="canvas" class="hidden rounded-xl w-full"></canvas>
+            <div id="cam-placeholder" class="flex flex-col items-center justify-center py-16">
+              <div style="font-size:3rem;margin-bottom:12px;">📷</div>
+              <p class="text-sm font-600">Camera not started</p>
+            </div>
+          </div>
+          <div class="flex gap-3 mt-4">
+            <button id="btn-start" onclick="startCamera()" class="btn flex-1 py-3 rounded-xl text-sm font-600 text-white">Start Camera</button>
+            <button id="btn-capture" onclick="captureAndPredict()" class="btn flex-1 py-3 rounded-xl text-sm font-600 text-white hidden">📸 Capture</button>
+            <button id="btn-retake" onclick="retake()" class="flex-1 py-3 rounded-xl text-sm font-600 hidden" style="background:rgba(255,255,255,0.04);border:1px solid rgba(148,184,217,0.15);">↩ Retake</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Result Panel -->
+      <div class="glass rounded-2xl p-5 flex flex-col">
+        <h3 class="text-xs font-700 mb-4" style="color:#94b8d9;text-transform:uppercase;letter-spacing:0.08em;">Classification Result</h3>
+
+        <div id="result-empty" class="flex-1 flex flex-col items-center justify-center text-center py-8">
+          <div style="font-size:3.5rem;margin-bottom:16px;opacity:0.3;">☁️</div>
+          <p class="mono text-sm" style="color:#94b8d9;">Awaiting image...</p>
+        </div>
+
+        <div id="result-loading" class="flex-1 flex-col items-center justify-center hidden">
+          <div class="loader mb-4"></div>
+          <p class="mono text-xs" style="color:#94b8d9;">Classifying...</p>
+        </div>
+
+        <div id="result-content" class="hidden flex-col gap-4">
+          <div class="pred-badge rounded-xl p-4 text-center">
+            <div id="res-emoji" style="font-size:2rem;margin-bottom:8px;">☁️</div>
+            <div id="res-name" class="text-2xl" style="font-weight:800;"></div>
+            <div id="res-abbr" class="mono text-xs mt-1" style="color:#94b8d9;"></div>
+            <div id="res-conf" class="mono text-sm mt-1" style="color:#60a5fa;"></div>
+          </div>
+          <div>
+            <p class="mono text-xs mb-3" style="color:#94b8d9;text-transform:uppercase;letter-spacing:0.06em;">All classes</p>
+            <div id="result-bars" class="flex flex-col gap-2"></div>
+          </div>
+          <button onclick="resetResult()" class="w-full py-2.5 rounded-xl text-sm font-600" style="background:rgba(255,255,255,0.04);border:1px solid rgba(148,184,217,0.15);">Classify another →</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Class reference -->
+    <div class="glass rounded-2xl p-5 mt-6">
+      <p class="mono text-xs mb-4" style="color:#94b8d9;text-transform:uppercase;letter-spacing:0.08em;">11 Cloud Classes</p>
+      <div class="grid gap-2" style="grid-template-columns:repeat(auto-fill,minmax(180px,1fr));">
+        ${[['Ac','Altocumulus','🌥️'],['As','Altostratus','🌫️'],['Cb','Cumulonimbus','⛈️'],['Cc','Cirrocumulus','🌤️'],['Ci','Cirrus','🌫️'],['Cs','Cirrostratus','☁️'],['Ct','Contrail','✈️'],['Cu','Cumulus','⛅'],['Ns','Nimbostratus','🌧️'],['Sc','Stratocumulus','☁️'],['St','Stratus','🌁']].map(([a,n,e])=>`<div class="flex items-center gap-2 p-2 rounded-lg" style="background:rgba(255,255,255,0.03);"><span>${e}</span><span class="mono text-xs"><b>${a}</b> — ${n}</span></div>`).join('')}
+      </div>
+    </div>
+  </main>
+
+  <script>
+    const API = '';  // empty = same origin; change to 'http://localhost:8000' for local dev
+
+    let selectedFile = null;
+    let stream = null;
+
+    // ── API Health check ──────────────────────────────────────
+    async function checkHealth() {
+      try {
+        const r = await fetch(`${API}/health`);
+        if (r.ok) {
+          document.getElementById('api-dot').style.cssText = 'background:#22c55e;box-shadow:0 0 6px #22c55e;';
+          document.getElementById('api-status').textContent = 'API ready';
+        } else throw new Error();
+      } catch {
+        document.getElementById('api-dot').style.cssText = 'background:#ef4444;box-shadow:0 0 6px #ef4444;';
+        document.getElementById('api-status').textContent = 'API offline';
+      }
+    }
+    checkHealth();
+
+    // ── Tabs ──────────────────────────────────────────────────
+    function switchTab(tab) {
+      const isUpload = tab === 'upload';
+      document.getElementById('panel-upload').classList.toggle('hidden', !isUpload);
+      document.getElementById('panel-camera').classList.toggle('hidden', isUpload);
+      document.getElementById('tab-upload').classList.toggle('tab-active', isUpload);
+      document.getElementById('tab-camera').classList.toggle('tab-active', !isUpload);
+      document.getElementById('tab-upload').style.color = isUpload ? '' : '#94b8d9';
+      document.getElementById('tab-camera').style.color = !isUpload ? '' : '#94b8d9';
+      if (isUpload && stream) stopStream();
+    }
+
+    // ── Upload ────────────────────────────────────────────────
+    function handleDrop(e) {
+      e.preventDefault();
+      document.getElementById('drop-zone').classList.remove('drag-over');
+      const file = e.dataTransfer.files[0];
+      if (file?.type.startsWith('image/')) loadFile(file);
+    }
+    function handleFileSelect(e) { if (e.target.files[0]) loadFile(e.target.files[0]); }
+
+    function loadFile(file) {
+      selectedFile = file;
+      const reader = new FileReader();
+      reader.onload = e => {
+        const img = document.getElementById('preview-img');
+        img.src = e.target.result;
+        img.classList.remove('hidden');
+        document.getElementById('upload-placeholder').classList.add('hidden');
+        document.getElementById('predict-btn').disabled = false;
+        resetResult();
+      };
+      reader.readAsDataURL(file);
+    }
+
+    async function predictUpload() {
+      if (!selectedFile) return;
+      await sendToAPI(selectedFile);
+    }
+
+    // ── Camera ────────────────────────────────────────────────
+    async function startCamera() {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+        const video = document.getElementById('video');
+        video.srcObject = stream;
+        video.classList.remove('hidden');
+        document.getElementById('cam-placeholder').classList.add('hidden');
+        document.getElementById('btn-start').classList.add('hidden');
+        document.getElementById('btn-capture').classList.remove('hidden');
+      } catch { alert('Camera access denied.'); }
+    }
+
+    function stopStream() {
+      stream?.getTracks().forEach(t => t.stop());
+      stream = null;
+    }
+
+    async function captureAndPredict() {
+      const video  = document.getElementById('video');
+      const canvas = document.getElementById('canvas');
+      canvas.width  = video.videoWidth;
+      canvas.height = video.videoHeight;
+      canvas.getContext('2d').drawImage(video, 0, 0);
+      video.classList.add('hidden');
+      canvas.classList.remove('hidden');
+      document.getElementById('btn-capture').classList.add('hidden');
+      document.getElementById('btn-retake').classList.remove('hidden');
+      stopStream();
+
+      canvas.toBlob(async blob => {
+        await sendToAPI(new File([blob], 'capture.jpg', { type: 'image/jpeg' }));
+      }, 'image/jpeg');
+    }
+
+    function retake() {
+      document.getElementById('canvas').classList.add('hidden');
+      document.getElementById('btn-retake').classList.add('hidden');
+      document.getElementById('cam-placeholder').classList.remove('hidden');
+      document.getElementById('btn-start').classList.remove('hidden');
+      resetResult();
+    }
+
+    // ── API Call ──────────────────────────────────────────────
+    async function sendToAPI(file) {
+      showLoading();
+      const form = new FormData();
+      form.append('file', file);
+      try {
+        const r    = await fetch(`${API}/predict`, { method: 'POST', body: form });
+        if (!r.ok) throw new Error(await r.text());
+        const data = await r.json();
+        showResult(data);
+      } catch(e) {
+        showEmpty();
+        alert('Prediction failed: ' + e.message);
+      }
+    }
+
+    // ── UI ────────────────────────────────────────────────────
+    function showLoading() {
+      document.getElementById('result-empty').classList.add('hidden');
+      document.getElementById('result-loading').classList.remove('hidden');
+      document.getElementById('result-loading').classList.add('flex');
+      document.getElementById('result-content').classList.add('hidden');
+    }
+    function showEmpty() {
+      document.getElementById('result-empty').classList.remove('hidden');
+      document.getElementById('result-loading').classList.add('hidden');
+      document.getElementById('result-content').classList.add('hidden');
+    }
+    function resetResult() { showEmpty(); }
+
+    function showResult(data) {
+      document.getElementById('result-loading').classList.add('hidden');
+      document.getElementById('result-empty').classList.add('hidden');
+      const content = document.getElementById('result-content');
+      content.classList.remove('hidden');
+      content.classList.add('flex');
+
+      document.getElementById('res-emoji').textContent = data.top.emoji;
+      document.getElementById('res-name').textContent  = data.top.name;
+      document.getElementById('res-abbr').textContent  = data.top.abbr;
+      document.getElementById('res-conf').textContent  = `${data.top.confidence}% confidence`;
+
+      const bars = document.getElementById('result-bars');
+      bars.innerHTML = '';
+      data.all.forEach((item, i) => {
+        const isTop = i === 0;
+        const row = document.createElement('div');
+        row.innerHTML = `
+          <div class="flex justify-between items-center mb-1">
+            <span class="flex items-center gap-1.5 text-xs font-600" style="color:${isTop?'#e2eaf4':'#94b8d9'}">
+              <span>${item.emoji}</span>
+              <span class="mono">${item.abbr} — ${item.name}</span>
+            </span>
+            <span class="mono text-xs" style="color:${isTop?'#60a5fa':'rgba(148,184,217,0.4)'}">${item.confidence}%</span>
+          </div>
+          <div class="bar-track">
+            <div class="bar-fill ${isTop?'top':''}" style="width:0%" data-w="${item.confidence}%"></div>
+          </div>`;
+        bars.appendChild(row);
+      });
+      requestAnimationFrame(() => {
+        document.querySelectorAll('.bar-fill').forEach(b => b.style.width = b.dataset.w);
+      });
+    }
+  </script>
+</body>
+</html>
