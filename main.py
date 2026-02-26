@@ -105,7 +105,11 @@ async def predict(file: UploadFile = File(...)):
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid image file")
 
-    model = get_model()
+    try:
+        model = get_model()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Model load failed: {e}")
+
     arr   = preprocess(image)
 
     import tensorflow as tf  # already cached by Python, no overhead
