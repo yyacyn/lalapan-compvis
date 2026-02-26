@@ -56,16 +56,26 @@ _model = None
 def get_model():
     global _model
     if _model is None:
-        # Download model if not present
-        if not os.path.exists(MODEL_PATH):
+        # Download model if not present or corrupt (< 50 MB)
+        if not os.path.exists(MODEL_PATH) or os.path.getsize(MODEL_PATH) < 50 * 1024 * 1024:
+            if os.path.exists(MODEL_PATH):
+                os.remove(MODEL_PATH)  # delete corrupt/incomplete file
             if not MODEL_GDRIVE:
                 raise RuntimeError(
                     "Model file not found and MODEL_GDRIVE_URL env var is not set."
                 )
-            import gdown
-            print(f"Downloading model from Google Drive...")
-            gdown.download(MODEL_GDRIVE, MODEL_PATH, quiet=False, fuzzy=True)
-            print("Download complete.")
+            import re, gdown
+            # Extract file ID from Google Drive URL if full URL is given
+            match = re.search(r"/d/([a-zA-Z0-9_-]+)", MODEL_GDRIVE)
+            file_id = match.group(1) if match else MODEL_GDRIVE
+            print(f"Downloading model (file ID: {file_id})...")
+            gdown.download(id=file_id, output=MODEL_PATH, quiet=False)
+            if not os.path.exists(MODEL_PATH) or os.path.getsize(MODEL_PATH) < 50 * 1024 * 1024:
+                raise RuntimeError(
+                    f"Download failed or file too small ({os.path.getsize(MODEL_PATH) if os.path.exists(MODEL_PATH) else 0} bytes). "
+                    "Check that Google Drive sharing is set to 'Anyone with the link'."
+                )
+            print(f"Download complete ({os.path.getsize(MODEL_PATH) // 1024 // 1024} MB).")
 
         import tensorflow as tf
         print(f"Loading model from {MODEL_PATH}...")
