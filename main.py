@@ -2,46 +2,47 @@ import os
 import io
 import numpy as np
 from PIL import Image
+import onnxruntime as rt
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from typing import List
 
 # ── Config ────────────────────────────────────────────────────
-MODEL_PATH   = os.getenv("MODEL_PATH", "best_cloud_densenet.keras")
-MODEL_GDRIVE = os.getenv("MODEL_GDRIVE_URL", "")
-IMG_SIZE     = (256, 256)
+MODEL_PATH = os.getenv("MODEL_PATH", "cloud_densenet.onnx")
+IMG_SIZE   = (256, 256)
 
-CLASS_ABBR = ["Ac","As","Cb","Cc","Ci","Cs","Ct","Cu","Ns","Sc","St"]
-CLASS_DISPLAY = [
-    "Altocumulus","Altostratus","Cumulonimbus","Cirrocumulus",
-    "Cirrus","Cirrostratus","Contrail","Cumulus",
-    "Nimbostratus","Stratocumulus","Stratus"
+CLASS_NAMES = [
+    "1_cumulus", "2_altocumulus", "3_cirrus",
+    "4_clearsky", "5_stratocumulus", "6_cumulonimbus"
 ]
-CLASS_EMOJI = ["🌥️","🌫️","⛈️","🌤️","🌫️","☁️","✈️","⛅","🌧️","☁️","🌁"]
+CLASS_DISPLAY = [
+    "Cumulus", "Altocumulus", "Cirrus",
+    "Clear Sky", "Stratocumulus", "Cumulonimbus"
+]
+CLASS_EMOJI = ["🌤️", "🌥️", "🌫️", "☀️", "☁️", "⛈️"]
 
-# ── App (starts BEFORE TensorFlow loads) ─────────────────────
+print(f"Loading ONNX model from {MODEL_PATH}...")
+sess       = rt.InferenceSession(MODEL_PATH)
+input_name = sess.get_inputs()[0].name
+print("Model loaded!")
+
+# ── App ───────────────────────────────────────────────────────
 app = FastAPI(
     title="Cloud Classifier API",
-    description="DenseNet121 cloud classification — 11 classes",
-    version="1.0.0"
+    description="DenseNet121 cloud classification — 6 classes",
+    version="2.0.0"
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # restrict to your Vercel URL in production
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-if os.path.exists("static"):
-    app.mount("/static", StaticFiles(directory="static"), name="static")
-
 # ── Schemas ───────────────────────────────────────────────────
 class Prediction(BaseModel):
-    abbr: str
     name: str
     emoji: str
     confidence: float
@@ -50,59 +51,30 @@ class PredictionResponse(BaseModel):
     top: Prediction
     all: List[Prediction]
 
-# ── Lazy model loader (TF imported here, NOT at module level) ─
-_model = None
+# ── Helpers ───────────────────────────────────────────────────
+# def redistribute_mixed(probs: np.ndarray) -> np.ndarray:
+#     """Redistribute Mixed probability proportionally to other classes."""
+#     mixed_prob = probs[MIXED_IDX]
+#     result = probs.copy()
+#     result[MIXED_IDX] = 0.0
+#     total = result.sum()
+#     if total > 0:
+#         result += (result / total) * mixed_prob
+#     return result
 
-def get_model():
-    global _model
-    if _model is None:
-        # Download model if not present or corrupt (< 50 MB)
-        if not os.path.exists(MODEL_PATH) or os.path.getsize(MODEL_PATH) < 50 * 1024 * 1024:
-            if os.path.exists(MODEL_PATH):
-                os.remove(MODEL_PATH)  # delete corrupt/incomplete file
-            if not MODEL_GDRIVE:
-                raise RuntimeError(
-                    "Model file not found and MODEL_GDRIVE_URL env var is not set."
-                )
-            import re, gdown
-            # Extract file ID from Google Drive URL if full URL is given
-            match = re.search(r"/d/([a-zA-Z0-9_-]+)", MODEL_GDRIVE)
-            file_id = match.group(1) if match else MODEL_GDRIVE
-            print(f"Downloading model (file ID: {file_id})...")
-            gdown.download(id=file_id, output=MODEL_PATH, quiet=False)
-            if not os.path.exists(MODEL_PATH) or os.path.getsize(MODEL_PATH) < 50 * 1024 * 1024:
-                raise RuntimeError(
-                    f"Download failed or file too small ({os.path.getsize(MODEL_PATH) if os.path.exists(MODEL_PATH) else 0} bytes). "
-                    "Check that Google Drive sharing is set to 'Anyone with the link'."
-                )
-            print(f"Download complete ({os.path.getsize(MODEL_PATH) // 1024 // 1024} MB).")
-
-        import tensorflow as tf
-        print(f"Loading model from {MODEL_PATH}...")
-        _model = tf.keras.models.load_model(MODEL_PATH)
-        print("Model loaded!")
-    return _model
-
-# ── Preprocessing ─────────────────────────────────────────────
 def preprocess(image: Image.Image) -> np.ndarray:
     image = image.convert("RGB").resize(IMG_SIZE)
     arr   = np.array(image, dtype=np.float32)
-    return np.expand_dims(arr, axis=0)
+    return np.expand_dims(arr, axis=0)  # (1, 256, 256, 3)
 
 # ── Routes ────────────────────────────────────────────────────
-@app.get("/", response_class=HTMLResponse)
-def root():
-    html_path = "static/index.html"
-    if os.path.exists(html_path):
-        with open(html_path) as f:
-            return f.read()
-    return HTMLResponse("<h1>Cloud Classifier API</h1><p>POST /predict with an image.</p>")
-
 @app.get("/health")
-@app.get("/kaithheathcheck")
-@app.get("/kaithhealthcheck")
 def health():
-    return {"status": "ok", "model": MODEL_PATH, "classes": len(CLASS_ABBR)}
+    return {
+        "status": "ok",
+        "model": MODEL_PATH,
+        "classes": len(CLASS_NAMES)
+    }
 
 @app.post("/predict", response_model=PredictionResponse)
 async def predict(file: UploadFile = File(...)):
@@ -115,24 +87,19 @@ async def predict(file: UploadFile = File(...)):
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid image file")
 
-    try:
-        model = get_model()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Model load failed: {e}")
-
     arr   = preprocess(image)
+    probs = sess.run(None, {input_name: arr})[0][0].astype("float32")
+    # probs = redistribute_mixed(probs)
 
-    import tensorflow as tf  # already cached by Python, no overhead
-    probs = model(arr, training=False)[0].numpy().astype("float32")
-
-    all_preds = [
+    sorted_idx = np.argsort(probs)[::-1]
+    all_preds  = [
         Prediction(
-            abbr=CLASS_ABBR[i],
             name=CLASS_DISPLAY[i],
             emoji=CLASS_EMOJI[i],
             confidence=round(float(probs[i]) * 100, 2)
         )
-        for i in np.argsort(probs)[::-1]
+        for i in sorted_idx
+        # if i != MIXED_IDX  # exclude mixed from response entirely
     ]
 
     return PredictionResponse(top=all_preds[0], all=all_preds)
